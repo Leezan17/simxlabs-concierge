@@ -1,0 +1,64 @@
+{
+  "_comment": "Paste each method into Convai → Character → External API → Add Method",
+  "_base_url": "https://your-deployed-url.com (replace with your actual API URL)",
+
+  "methods": [
+    {
+      "name": "start_simulation",
+      "description": "Start a SimXLabs simulation run. Call this when the user asks to generate robot training data. Pass their request exactly as they described it.",
+      "http_method": "POST",
+      "endpoint": "https://YOUR_API_URL/run",
+      "request_body": {
+        "intent": "{user_intent}",
+        "num_demos": "{num_demos}"
+      },
+      "parameters": [
+        {
+          "name": "user_intent",
+          "type": "string",
+          "description": "The user's plain-English description of the simulation task. Example: 'bin picking, 10000 demos, maximize trajectory diversity'",
+          "required": true
+        },
+        {
+          "name": "num_demos",
+          "type": "integer",
+          "description": "Optional number of demonstrations. If not specified by the user, omit this field.",
+          "required": false
+        }
+      ],
+      "response_fields_to_use": ["run_id", "status", "task_type", "eta_seconds", "message", "trace_url"]
+    },
+
+    {
+      "name": "check_run_status",
+      "description": "Check the current status and progress of a simulation run. Use this when the user asks for an update, or after waiting for a run to complete.",
+      "http_method": "GET",
+      "endpoint": "https://YOUR_API_URL/run/{run_id}",
+      "parameters": [
+        {
+          "name": "run_id",
+          "type": "string",
+          "description": "The run ID returned when the simulation was started. Example: 'A3F7B2'",
+          "required": true
+        }
+      ],
+      "response_fields_to_use": ["run_id", "status", "stage", "progress", "eta_seconds"]
+    },
+
+    {
+      "name": "get_run_summary",
+      "description": "Get a completed run's full results and a human-readable summary. Only call this once the run status is 'completed'.",
+      "http_method": "GET",
+      "endpoint": "https://YOUR_API_URL/run/{run_id}/summary",
+      "parameters": [
+        {
+          "name": "run_id",
+          "type": "string",
+          "description": "The run ID to get results for.",
+          "required": true
+        }
+      ],
+      "response_fields_to_use": ["summary", "result", "trace_url"]
+    }
+  ]
+}
