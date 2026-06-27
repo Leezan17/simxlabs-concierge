@@ -268,6 +268,538 @@ async def execute_dag(run_id: str, parsed: Dict, num_demos: int, eta: int):
     }
 
 
+
+# ── Demo page ────────────────────────────────────────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+async def demo_page():
+    return HTMLResponse("""<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8">
+<title>SimXLabs x Convai</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;}
+body{font-family:'Inter',sans-serif;
+  background:linear-gradient(158deg,#080f07 0%,#0f1e0d 40%,#111f0f 60%,#080f07 100%);
+  color:#fff;}
+
+.shell{display:flex;flex-direction:column;height:100vh;}
+
+/* Top bar */
+.topbar{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 24px;border-bottom:1px solid rgba(255,255,255,0.05);flex-shrink:0;}
+.tb-left{display:flex;align-items:center;gap:8px;}
+.tb-logo{width:20px;height:20px;}
+.tb-brand{font-size:13px;font-weight:700;letter-spacing:-0.01em;}
+.tb-pill{font-size:8px;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;
+  color:#7DC85A;border:1px solid rgba(125,200,90,0.22);border-radius:20px;padding:2px 8px;}
+.tb-right{font-size:10px;color:rgba(255,255,255,0.18);letter-spacing:0.06em;}
+
+/* Split */
+.split{display:flex;flex:1;min-height:0;}
+
+/* ─── LEFT: Simra pane ─── */
+.pane-convai{width:30%;border-right:1px solid rgba(255,255,255,0.05);
+  display:flex;flex-direction:column;flex-shrink:0;}
+.pane-label{padding:10px 20px;font-size:9px;font-weight:600;letter-spacing:0.18em;
+  text-transform:uppercase;color:rgba(255,255,255,0.18);
+  border-bottom:1px solid rgba(255,255,255,0.04);display:flex;align-items:center;gap:8px;}
+.pane-label .dot{width:6px;height:6px;border-radius:50%;background:#7DC85A;
+  box-shadow:0 0 8px #7DC85A;animation:pulse 2s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
+.convai-panel{flex:1;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;padding:24px 20px;}
+.avatar-wrap{position:relative;margin-bottom:14px;}
+.avatar-ring{position:absolute;inset:-8px;border-radius:50%;
+  border:1px solid rgba(125,200,90,0.16);animation:ring 2.5s ease-in-out infinite;}
+.avatar-ring2{position:absolute;inset:-17px;border-radius:50%;
+  border:1px solid rgba(125,200,90,0.06);animation:ring 2.5s ease-in-out infinite 0.85s;}
+@keyframes ring{0%,100%{opacity:0.5;transform:scale(1);}50%{opacity:0.1;transform:scale(1.06);}}
+.simra-photo{width:108px;height:108px;border-radius:50%;object-fit:cover;object-position:top;
+  border:2px solid rgba(125,200,90,0.32);display:block;}
+.live-badge{display:flex;align-items:center;gap:5px;margin-bottom:12px;
+  font-size:9px;color:rgba(125,200,90,0.5);letter-spacing:0.1em;}
+.live-dot{width:5px;height:5px;border-radius:50%;background:#7DC85A;
+  animation:pulse 1.5s ease-in-out infinite;}
+.convai-name{font-size:15px;font-weight:700;margin-bottom:4px;}
+.convai-role{font-size:10px;color:rgba(255,255,255,0.22);margin-bottom:14px;
+  text-align:center;line-height:1.7;}
+.caps{display:flex;flex-direction:column;gap:7px;margin-bottom:20px;width:100%;max-width:200px;}
+.cap{display:flex;align-items:flex-start;gap:8px;font-size:10px;
+  color:rgba(255,255,255,0.26);line-height:1.5;}
+.cap-dot{width:4px;height:4px;border-radius:50%;background:#7DC85A;opacity:0.45;
+  flex-shrink:0;margin-top:4px;}
+.talk-btn{display:flex;align-items:center;gap:8px;padding:11px 22px;
+  background:rgba(125,200,90,0.08);border:1px solid rgba(125,200,90,0.2);
+  border-radius:9px;color:#7DC85A;font-size:12px;font-weight:600;
+  cursor:pointer;text-decoration:none;transition:all 0.18s;margin-bottom:8px;}
+.talk-btn svg{width:14px;height:14px;}
+.talk-btn:hover{background:rgba(125,200,90,0.14);transform:translateY(-1px);
+  box-shadow:0 6px 20px rgba(125,200,90,0.08);}
+.convai-note{font-size:9px;color:rgba(255,255,255,0.1);text-align:center;}
+
+/* ─── RIGHT: Pilot pane ─── */
+.pane-pilot{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+.pilot-scroll{flex:1;overflow-y:auto;padding:22px 26px 26px;}
+.pilot-scroll::-webkit-scrollbar{width:3px;}
+.pilot-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.06);border-radius:3px;}
+
+/* ─── BIG STATS ROW ─── */
+.stats-bar{display:flex;align-items:center;margin-bottom:18px;
+  background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.06);
+  border-radius:16px;padding:22px 0;}
+.sb-item{flex:1;text-align:center;}
+.sb-val{font-size:42px;font-weight:900;color:#7DC85A;
+  letter-spacing:-0.05em;line-height:1;}
+.sb-lbl{font-size:10px;font-weight:500;color:rgba(255,255,255,0.22);
+  margin-top:6px;letter-spacing:0.1em;text-transform:uppercase;}
+.sb-live{display:flex;align-items:center;justify-content:center;gap:4px;
+  font-size:8px;color:rgba(125,200,90,0.38);margin-top:4px;}
+.sb-live-dot{width:4px;height:4px;border-radius:50%;background:#7DC85A;
+  animation:pulse 1.5s ease-in-out infinite;}
+.sb-sep{width:1px;height:48px;background:rgba(255,255,255,0.05);}
+
+/* ─── PIPELINE NODES ─── */
+.pipe-flow{display:flex;align-items:center;justify-content:space-between;
+  background:rgba(0,0,0,0.18);border:1px solid rgba(255,255,255,0.05);
+  border-radius:16px;padding:28px 18px;margin-bottom:16px;}
+
+.pnode{display:flex;flex-direction:column;align-items:center;flex-shrink:0;width:80px;}
+.pnode-wrap{position:relative;width:68px;height:68px;margin-bottom:12px;}
+.pnode-outer{position:absolute;inset:-7px;border-radius:50%;
+  border:1px solid rgba(125,200,90,0.08);
+  animation:nodeRing 3s ease-in-out infinite;}
+@keyframes nodeRing{0%,100%{opacity:0.5;transform:scale(1);}50%{opacity:0.08;transform:scale(1.1);}}
+.pnode-circle{width:68px;height:68px;border-radius:50%;
+  background:rgba(125,200,90,0.07);border:1.5px solid rgba(125,200,90,0.2);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 0 0 0 rgba(125,200,90,0);}
+.pnode-circle svg{display:block;}
+.pnode.hl .pnode-circle{background:rgba(125,200,90,0.12);
+  border-color:rgba(125,200,90,0.35);
+  box-shadow:0 0 24px rgba(125,200,90,0.12);}
+.pnode-lbl{font-size:12px;font-weight:600;color:rgba(255,255,255,0.5);
+  text-align:center;line-height:1.3;}
+.pnode-sub{font-size:9px;color:rgba(125,200,90,0.38);
+  margin-top:3px;text-align:center;white-space:nowrap;}
+
+/* Animated connector */
+.pconn{flex:1;display:flex;align-items:center;padding:0 4px;padding-bottom:30px;}
+.pconn-line{flex:1;height:2px;border-radius:1px;
+  background:linear-gradient(90deg,rgba(125,200,90,0.06),rgba(125,200,90,0.12),rgba(125,200,90,0.06));
+  position:relative;overflow:hidden;}
+@keyframes flowR{0%{left:-12px;opacity:0;}8%{opacity:1;}92%{opacity:1;}100%{left:calc(100% + 12px);opacity:0;}}
+.pdot{position:absolute;top:50%;transform:translateY(-50%);
+  width:8px;height:8px;border-radius:50%;background:#7DC85A;
+  box-shadow:0 0 10px rgba(125,200,90,0.9),0 0 4px #7DC85A;
+  animation:flowR 2.2s linear infinite;}
+.pdot:nth-child(2){animation-delay:0.73s;}
+.pdot:nth-child(3){animation-delay:1.47s;}
+
+/* ─── ACTIVITY TICKER ─── */
+.ticker{display:flex;align-items:center;gap:10px;padding:6px 0 14px;}
+.ticker-dot{width:5px;height:5px;border-radius:50%;background:#7DC85A;
+  flex-shrink:0;animation:pulse 1.5s ease-in-out infinite;}
+.ticker-txt{font-size:11px;color:rgba(255,255,255,0.2);
+  font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ticker-txt .ok{color:rgba(125,200,90,0.55);}
+.ticker-txt .act{color:rgba(255,179,71,0.5);}
+
+/* ─── RUN SECTION ─── */
+.run-section{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);
+  border-radius:14px;padding:20px 22px;}
+.run-sec-label{font-size:9px;font-weight:600;letter-spacing:0.18em;text-transform:uppercase;
+  color:rgba(255,255,255,0.18);margin-bottom:14px;}
+textarea{width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);
+  border-radius:10px;padding:12px 14px;color:#fff;font-size:12px;
+  font-family:'Inter',sans-serif;resize:none;height:54px;line-height:1.6;
+  outline:none;transition:border 0.2s;margin-bottom:10px;}
+textarea:focus{border-color:rgba(125,200,90,0.3);}
+textarea::placeholder{color:rgba(255,255,255,0.14);}
+.prompts{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;}
+.prompt{font-size:10px;padding:5px 11px;border-radius:20px;
+  background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);
+  color:rgba(255,255,255,0.28);cursor:pointer;transition:all 0.15s;}
+.prompt:hover{background:rgba(125,200,90,0.07);border-color:rgba(125,200,90,0.2);
+  color:rgba(255,255,255,0.6);}
+.run-btn{width:100%;padding:12px;background:#7DC85A;border:none;border-radius:10px;
+  font-size:13px;font-weight:700;color:#0A1509;cursor:pointer;transition:all 0.15s;
+  letter-spacing:0.02em;}
+.run-btn:hover:not(:disabled){background:#8FD96A;transform:translateY(-1px);}
+.run-btn:disabled{opacity:0.3;cursor:not-allowed;transform:none;}
+.run-status{display:none;margin-top:18px;}
+.run-status.show{display:block;}
+.run-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;}
+.run-id{font-size:11px;color:rgba(255,255,255,0.28);}
+.run-id strong{color:#7DC85A;font-weight:600;}
+.status-pill{font-size:9px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+  padding:3px 9px;border-radius:20px;}
+.pill-queued{color:rgba(255,255,255,0.3);background:rgba(255,255,255,0.05);}
+.pill-running{color:#FFB347;background:rgba(255,179,71,0.08);}
+.pill-completed{color:#7DC85A;background:rgba(125,200,90,0.08);}
+.prog-track{background:rgba(255,255,255,0.05);border-radius:3px;height:3px;margin-bottom:5px;}
+.prog-fill{background:linear-gradient(90deg,#5DB840,#7DC85A);height:3px;border-radius:3px;
+  width:0%;transition:width 0.8s ease;}
+.stage-txt{font-size:10px;color:rgba(255,255,255,0.2);margin-bottom:14px;}
+.model-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:12px;}
+.mc{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);
+  border-radius:9px;padding:11px 10px 9px;transition:all 0.25s;}
+.mc.active{background:rgba(125,200,90,0.07);border-color:rgba(125,200,90,0.24);}
+.mc.done{background:rgba(125,200,90,0.04);border-color:rgba(125,200,90,0.12);}
+.mc-name{font-size:9px;font-weight:700;letter-spacing:0.06em;
+  color:rgba(255,255,255,0.28);margin-bottom:6px;transition:color 0.2s;}
+.mc.active .mc-name,.mc.done .mc-name{color:#7DC85A;}
+.mc-demos{font-size:16px;font-weight:800;color:rgba(255,255,255,0.1);
+  letter-spacing:-0.02em;transition:color 0.3s;}
+.mc.done .mc-demos{color:#fff;}
+.mc-div{font-size:9px;color:rgba(255,255,255,0.14);margin-top:2px;transition:color 0.2s;}
+.mc.done .mc-div{color:rgba(125,200,90,0.45);}
+.mc-dot{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,0.08);
+  margin-top:7px;transition:all 0.2s;}
+.mc.active .mc-dot{background:#7DC85A;box-shadow:0 0 6px #7DC85A;animation:pulse 1s ease-in-out infinite;}
+.mc.done .mc-dot{background:rgba(125,200,90,0.3);}
+.results{display:none;margin-top:14px;}
+.results.show{display:block;}
+.results-row{display:grid;grid-template-columns:repeat(4,1fr);gap:2px;
+  background:rgba(255,255,255,0.04);border-radius:10px;overflow:hidden;margin-bottom:10px;}
+.stat{background:#080f07;padding:12px 12px 10px;}
+.stat-l{font-size:8px;font-weight:600;letter-spacing:0.16em;text-transform:uppercase;
+  color:rgba(255,255,255,0.18);margin-bottom:6px;}
+.stat-v{font-size:18px;font-weight:900;color:#7DC85A;letter-spacing:-0.02em;}
+.stat-s{font-size:8px;color:rgba(255,255,255,0.16);margin-top:2px;}
+.trace-btn{display:block;padding:10px 14px;text-align:center;
+  background:rgba(125,200,90,0.04);border:1px solid rgba(125,200,90,0.1);
+  border-radius:9px;text-decoration:none;color:rgba(197,232,176,0.4);
+  font-size:11px;font-weight:500;transition:all 0.15s;}
+.trace-btn:hover{background:rgba(125,200,90,0.09);color:#7DC85A;}
+</style></head>
+<body>
+<div class="shell">
+
+  <div class="topbar">
+    <div class="tb-left">
+      <svg class="tb-logo" viewBox="0 0 48 48" fill="none">
+        <g stroke="rgba(255,255,255,0.22)" stroke-width="1.4" stroke-linecap="round">
+          <line x1="24" y1="10" x2="18" y2="17"/><line x1="24" y1="10" x2="30" y2="17"/>
+          <line x1="18" y1="19" x2="12" y2="25"/><line x1="18" y1="19" x2="24" y2="25"/>
+          <line x1="30" y1="19" x2="24" y2="25"/><line x1="30" y1="19" x2="36" y2="25"/>
+          <line x1="12" y1="29" x2="18" y2="35"/><line x1="24" y1="29" x2="18" y2="35"/>
+          <line x1="24" y1="29" x2="30" y2="35"/><line x1="36" y1="29" x2="30" y2="35"/>
+          <line x1="18" y1="37" x2="24" y2="43"/><line x1="30" y1="37" x2="24" y2="43"/>
+        </g>
+        <circle cx="24" cy="7" r="4" fill="#7DC85A"/>
+        <circle cx="18" cy="17" r="3.5" fill="#7DC85A" opacity="0.85"/>
+        <circle cx="30" cy="17" r="3.5" fill="#7DC85A" opacity="0.85"/>
+        <rect x="8" y="22" width="8" height="6" rx="2" fill="#7DC85A" opacity="0.7"/>
+        <rect x="20" y="22" width="8" height="6" rx="2" fill="#7DC85A" opacity="0.7"/>
+        <rect x="32" y="22" width="8" height="6" rx="2" fill="#7DC85A" opacity="0.7"/>
+        <rect x="14" y="31" width="8" height="6" rx="2" fill="#7DC85A" opacity="0.75"/>
+        <rect x="26" y="31" width="8" height="6" rx="2" fill="#7DC85A" opacity="0.75"/>
+        <circle cx="24" cy="43" r="3.5" fill="#7DC85A"/>
+      </svg>
+      <span class="tb-brand">SimXLabs</span>
+      <span class="tb-pill">Pilot</span>
+    </div>
+    <div class="tb-right">Powered by Convai</div>
+  </div>
+
+  <div class="split">
+
+    <!-- Left: Simra -->
+    <div class="pane-convai">
+      <div class="pane-label">
+        <div class="dot"></div>Simra — AI Concierge
+      </div>
+      <div class="convai-panel">
+        <div class="avatar-wrap">
+          <div class="avatar-ring"></div>
+          <div class="avatar-ring2"></div>
+          <img class="simra-photo"
+            src="https://storage.googleapis.com/experience-asset-storage/user-uploaded-avatar-image/db820f2f-7d0a-4220-8c90-23b477f35893_avatar_image_square?img_last_modified=1781921895"
+            alt="Simra"/>
+        </div>
+        <div class="live-badge"><div class="live-dot"></div>Live · Voice Enabled</div>
+        <div class="convai-name">Simra</div>
+        <div class="convai-role">SimXLabs AI Concierge<br/>Powered by Convai</div>
+        <div class="caps">
+          <div class="cap"><div class="cap-dot"></div>Answers questions about the foundation model pipeline</div>
+          <div class="cap"><div class="cap-dot"></div>Explains simulation results in plain English</div>
+          <div class="cap"><div class="cap-dot"></div>Walks through task types and traceability</div>
+        </div>
+        <a class="talk-btn" href="https://x.convai.com/?xpid=176dbd7e-b46d-48a6-82b0-6627c3973ce2&type=unlisted" target="_blank">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          Talk to Simra
+        </a>
+        <div class="convai-note">Opens in a new tab · voice enabled</div>
+      </div>
+    </div>
+
+    <!-- Right: Pilot visualization + run -->
+    <div class="pane-pilot">
+      <div class="pilot-scroll">
+
+        <!-- STATS BAR -->
+        <div class="stats-bar">
+          <div class="sb-item">
+            <div class="sb-val" id="mDemos">48,219</div>
+            <div class="sb-lbl">Demos Generated</div>
+            <div class="sb-live"><div class="sb-live-dot"></div>live</div>
+          </div>
+          <div class="sb-sep"></div>
+          <div class="sb-item">
+            <div class="sb-val" id="mDiversity">0.87</div>
+            <div class="sb-lbl">Diversity Score</div>
+          </div>
+          <div class="sb-sep"></div>
+          <div class="sb-item">
+            <div class="sb-val"><span id="mSpeedup">54</span>×</div>
+            <div class="sb-lbl">Cache Speedup</div>
+          </div>
+        </div>
+
+        <!-- PIPELINE FLOW -->
+        <div class="pipe-flow">
+
+          <!-- Node 1: Voice -->
+          <div class="pnode">
+            <div class="pnode-wrap">
+              <div class="pnode-outer"></div>
+              <div class="pnode-circle">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(125,200,90,0.75)" stroke-width="1.8" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              </div>
+            </div>
+            <div class="pnode-lbl">Voice</div>
+            <div class="pnode-sub">Convai</div>
+          </div>
+
+          <div class="pconn"><div class="pconn-line"><div class="pdot"></div><div class="pdot"></div><div class="pdot"></div></div></div>
+
+          <!-- Node 2: Parse -->
+          <div class="pnode">
+            <div class="pnode-wrap">
+              <div class="pnode-outer"></div>
+              <div class="pnode-circle">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(125,200,90,0.75)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="6" height="6" rx="1"/><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="1"/><line x1="15" y1="3" x2="15" y2="1"/><line x1="9" y1="23" x2="9" y2="21"/><line x1="15" y1="23" x2="15" y2="21"/><line x1="3" y1="9" x2="1" y2="9"/><line x1="3" y1="15" x2="1" y2="15"/><line x1="23" y1="9" x2="21" y2="9"/><line x1="23" y1="15" x2="21" y2="15"/></svg>
+              </div>
+            </div>
+            <div class="pnode-lbl">Parse</div>
+            <div class="pnode-sub">GPT-4o</div>
+          </div>
+
+          <div class="pconn"><div class="pconn-line"><div class="pdot"></div><div class="pdot"></div><div class="pdot"></div></div></div>
+
+          <!-- Node 3: Simulate -->
+          <div class="pnode">
+            <div class="pnode-wrap">
+              <div class="pnode-outer"></div>
+              <div class="pnode-circle">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(125,200,90,0.75)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              </div>
+            </div>
+            <div class="pnode-lbl">Simulate</div>
+            <div class="pnode-sub">Isaac · MuJoCo</div>
+          </div>
+
+          <div class="pconn"><div class="pconn-line"><div class="pdot"></div><div class="pdot"></div><div class="pdot"></div></div></div>
+
+          <!-- Node 4: 4 Models (highlighted) -->
+          <div class="pnode hl">
+            <div class="pnode-wrap">
+              <div class="pnode-outer"></div>
+              <div class="pnode-circle">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(125,200,90,0.9)" stroke-width="1.8"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><circle cx="8" cy="16" r="3"/><circle cx="16" cy="16" r="3"/></svg>
+              </div>
+            </div>
+            <div class="pnode-lbl" style="color:rgba(255,255,255,0.75);">4 Models</div>
+            <div class="pnode-sub">Pi0 · RT-2 +</div>
+          </div>
+
+          <div class="pconn"><div class="pconn-line"><div class="pdot"></div><div class="pdot"></div><div class="pdot"></div></div></div>
+
+          <!-- Node 5: Verify -->
+          <div class="pnode">
+            <div class="pnode-wrap">
+              <div class="pnode-outer"></div>
+              <div class="pnode-circle">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(125,200,90,0.75)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+              </div>
+            </div>
+            <div class="pnode-lbl">Verify</div>
+            <div class="pnode-sub">Physics Gate</div>
+          </div>
+
+          <div class="pconn"><div class="pconn-line"><div class="pdot"></div><div class="pdot"></div><div class="pdot"></div></div></div>
+
+          <!-- Node 6: Cache -->
+          <div class="pnode">
+            <div class="pnode-wrap">
+              <div class="pnode-outer"></div>
+              <div class="pnode-circle">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(125,200,90,0.75)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+              </div>
+            </div>
+            <div class="pnode-lbl">Cache</div>
+            <div class="pnode-sub">54× Speedup</div>
+          </div>
+
+        </div>
+
+        <!-- Live ticker -->
+        <div class="ticker">
+          <div class="ticker-dot"></div>
+          <div class="ticker-txt" id="tickerTxt"><span class="ok">&#10003; System active</span></div>
+        </div>
+
+        <!-- Run section -->
+        <div class="run-section">
+          <div class="run-sec-label">Try it — Run a Simulation</div>
+          <textarea id="intent" placeholder="Describe a robot task in plain English — e.g. bin picking, 10,000 demos, maximize diversity"></textarea>
+          <div class="prompts">
+            <div class="prompt" onclick="set('bin picking, 10000 demos, maximize trajectory diversity')">📦 Bin Picking</div>
+            <div class="prompt" onclick="set('peg insertion with sub-millimeter precision, 8000 demos')">🔩 Peg Insertion</div>
+            <div class="prompt" onclick="set('door opening across varied handle types, 12000 demos')">🚪 Door Opening</div>
+            <div class="prompt" onclick="set('cloth folding with deformable object dynamics, 6000 demos')">👕 Cloth Folding</div>
+          </div>
+          <button class="run-btn" id="runBtn" onclick="startRun()">Run Simulation &#8594;</button>
+
+          <div class="run-status" id="runStatus">
+            <div class="run-header">
+              <div class="run-id">Run <strong id="runIdTxt">—</strong></div>
+              <div class="status-pill pill-queued" id="statusPill">Queued</div>
+            </div>
+            <div class="prog-track"><div class="prog-fill" id="pFill"></div></div>
+            <div class="stage-txt" id="stageTxt">Initializing...</div>
+            <div class="model-grid">
+              <div class="mc" id="mc-Pi0"><div class="mc-name">Pi0</div><div class="mc-demos" id="md-Pi0">—</div><div class="mc-div" id="mdiv-Pi0">div —</div><div class="mc-dot"></div></div>
+              <div class="mc" id="mc-RT2"><div class="mc-name">RT-2</div><div class="mc-demos" id="md-RT2">—</div><div class="mc-div" id="mdiv-RT2">div —</div><div class="mc-dot"></div></div>
+              <div class="mc" id="mc-OpenVLA"><div class="mc-name">OpenVLA</div><div class="mc-demos" id="md-OpenVLA">—</div><div class="mc-div" id="mdiv-OpenVLA">div —</div><div class="mc-dot"></div></div>
+              <div class="mc" id="mc-MimicGen"><div class="mc-name">MimicGen</div><div class="mc-demos" id="md-MimicGen">—</div><div class="mc-div" id="mdiv-MimicGen">div —</div><div class="mc-dot"></div></div>
+            </div>
+            <div class="results" id="results">
+              <div class="results-row">
+                <div class="stat"><div class="stat-l">Demos</div><div class="stat-v" id="rDemos">—</div><div class="stat-s">verified</div></div>
+                <div class="stat"><div class="stat-l">Diversity</div><div class="stat-v" id="rDiv">—</div><div class="stat-s">score / 1.0</div></div>
+                <div class="stat"><div class="stat-l">Dataset</div><div class="stat-v" id="rMb">—</div><div class="stat-s">HDF5 + RLDS</div></div>
+                <div class="stat"><div class="stat-l">Warm Run</div><div class="stat-v" id="rSpeedup">—</div><div class="stat-s">speedup</div></div>
+              </div>
+              <a class="trace-btn" id="traceBtn" href="#" target="_blank">&#8594; View full execution trace</a>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const MODELS=['Pi0','RT-2','OpenVLA','MimicGen'];
+let pollId=null, done=new Set();
+let demoCount=48219, diversityVal=0.87, speedup=54;
+
+// Live demo counter ticks slowly
+setInterval(()=>{
+  demoCount+=Math.floor(Math.random()*3)+1;
+  document.getElementById('mDemos').textContent=demoCount.toLocaleString();
+  diversityVal=+(0.87+(Math.random()-0.5)*0.018).toFixed(2);
+  document.getElementById('mDiversity').textContent=diversityVal;
+}, 2600);
+
+// Ticker rotates through realistic events
+const TICKS=[
+  {cls:'ok', t:'&#10003; Pi0 trajectory verified &middot; diversity 0.89'},
+  {cls:'act',t:'&#8634; Isaac Sim spawning 32 parallel environments'},
+  {cls:'ok', t:'&#10003; HDF5 chunk written &middot; 128 demos flushed'},
+  {cls:'ok', t:'&#10003; Semantic cache hit &middot; bin_picking:8192'},
+  {cls:'act',t:'&#8634; RT-2 fine-tune batch 88/100 &middot; loss 0.031'},
+  {cls:'ok', t:'&#10003; Physics gate passed &middot; 97.3% acceptance'},
+  {cls:'act',t:'&#8634; MimicGen augmenting contact-rich demonstrations'},
+  {cls:'ok', t:'&#10003; OpenVLA policy rollout accepted &middot; score 0.91'},
+  {cls:'act',t:'&#8634; MuJoCo scene reset &middot; episode 2,140'},
+  {cls:'ok', t:'&#10003; RLDS export ready &middot; 3 shards &middot; warm speedup 54&#215;'},
+];
+let ti=0;
+function rotateTicker(){
+  const t=TICKS[ti%TICKS.length]; ti++;
+  document.getElementById('tickerTxt').innerHTML='<span class="'+t.cls+'">'+t.t+'</span>';
+}
+rotateTicker();
+setInterval(rotateTicker, 3800);
+
+function set(t){document.getElementById('intent').value=t;}
+
+async function startRun(){
+  const intent=document.getElementById('intent').value.trim();
+  if(!intent)return;
+  const btn=document.getElementById('runBtn');
+  btn.disabled=true; btn.textContent='Launching...';
+  done.clear();
+  MODELS.forEach(m=>{
+    const k=m.replace('-','');
+    document.getElementById('mc-'+k).className='mc';
+    document.getElementById('md-'+k).textContent='—';
+    document.getElementById('mdiv-'+k).textContent='div —';
+  });
+  document.getElementById('results').classList.remove('show');
+  document.getElementById('pFill').style.width='0%';
+  try{
+    const r=await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({intent})});
+    const d=await r.json();
+    document.getElementById('runIdTxt').textContent=d.run_id;
+    document.getElementById('runStatus').classList.add('show');
+    document.getElementById('tickerTxt').innerHTML='<span class="act">&#8594; Run '+d.run_id+' launched &middot; ETA ~'+d.eta_seconds+'s</span>';
+    btn.textContent='Running...';
+    pollId=setInterval(()=>poll(d.run_id),1800);
+  }catch(e){btn.disabled=false;btn.textContent='Run Simulation →';}
+}
+
+async function poll(id){
+  try{
+    const r=await fetch('/run/'+id);
+    const d=await r.json();
+    const pct=Math.round(d.progress*100);
+    document.getElementById('pFill').style.width=pct+'%';
+    document.getElementById('stageTxt').textContent=d.stage+' · '+pct+'%';
+    const pill=document.getElementById('statusPill');
+    pill.className='status-pill pill-'+d.status;
+    pill.textContent=d.status.charAt(0).toUpperCase()+d.status.slice(1);
+    MODELS.forEach(m=>{
+      const k=m.replace('-','');
+      if(done.has(m))return;
+      if((d.stage||'').includes(m))document.getElementById('mc-'+k).className='mc active';
+    });
+    if(d.status==='completed'&&d.result){
+      clearInterval(pollId);
+      const res=d.result;
+      (res.model_breakdown||[]).forEach(mb=>{
+        const k=mb.model.replace('-','');
+        document.getElementById('mc-'+k).className='mc done';
+        document.getElementById('md-'+k).textContent=mb.demos_generated.toLocaleString();
+        document.getElementById('mdiv-'+k).textContent='div '+mb.diversity_score;
+        done.add(mb.model);
+      });
+      document.getElementById('rDemos').textContent=res.total_demos.toLocaleString();
+      document.getElementById('rDiv').textContent=res.diversity_score;
+      document.getElementById('rMb').textContent=res.dataset_size_mb+' MB';
+      document.getElementById('rSpeedup').textContent=res.warm_run_speedup;
+      document.getElementById('traceBtn').href='/trace/'+id+'/view';
+      document.getElementById('results').classList.add('show');
+      demoCount+=res.total_demos;
+      document.getElementById('mDemos').textContent=demoCount.toLocaleString();
+      document.getElementById('mSpeedup').textContent=(res.warm_run_speedup||'54').replace('×','');
+      document.getElementById('tickerTxt').innerHTML='<span class="ok">&#10003; Run '+id+' complete &middot; '+res.total_demos.toLocaleString()+' demos &middot; diversity '+res.diversity_score+'</span>';
+      const btn=document.getElementById('runBtn');
+      btn.disabled=false; btn.textContent='Run Another →';
+    }
+  }catch(e){}
+}
+</script>
+</body></html>""")
+
+
 # ── API routes ───────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
