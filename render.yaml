@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: simxlabs-concierge
+    runtime: docker
+    plan: free
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: API_BASE_URL
+        sync: false
