@@ -64,6 +64,8 @@ class RunResponse(BaseModel):
     created_at: str
     trace_url: str
     message: str
+    parsed_intent: Optional[Dict] = None
+    osmo_workflow: Optional[str] = None
 
 
 # ── Intent parsing (real LLM call via Anthropic SDK) ────────────────────────
@@ -125,6 +127,94 @@ def _fallback_parse(intent: str) -> Dict[str, Any]:
         "diversity_goal": "high" if "diverse" in lower or "diversity" in lower else "medium",
         "key_constraints": [],
     }
+
+
+def generate_osmo_workflow(run_id: str, parsed: Dict, num_demos: int, cfg: Dict) -> str:
+    """Compile SimXLabs intent into a valid NVIDIA OSMO workflow YAML."""
+    task_type = parsed.get("task_type", "bin_picking")
+    sim_engine = cfg.get("sim_engine", "Isaac Sim")
+    engine_image = {
+        "Isaac Sim": "nvcr.io/nvidia/isaac-sim:4.2.0",
+        "MuJoCo":    "simxlabs/mujoco-sim:latest",
+        "Genesis":   "simxlabs/genesis-sim:latest",
+    }.get(sim_engine, "nvcr.io/nvidia/isaac-sim:4.2.0")
+    slug = task_type.replace("_", "-")
+    return f"""# SimXLabs x NVIDIA OSMO — Generated Workflow
+# Run: {run_id}  |  Task: {task_type}  |  Demos: {num_demos:,}
+# Compiled by SimXLabs Decision Engine
+
+workflow:
+  name: simxlabs-{slug}-{run_id.lower()}
+
+  tasks:
+
+  - name: env-compiler
+    image: {engine_image}
+    platform: rtx-pro-6000
+    resources:
+      gpu: 1
+    outputs:
+    - url: s3://simxlabs-runs/{run_id}/env/
+
+  - name: sample-pi0
+    image: simxlabs/pi0-sampler:1.0
+    platform: gb200
+    resources:
+      gpu: 2
+    inputs:
+    - task: env-compiler
+    outputs:
+    - url: s3://simxlabs-runs/{run_id}/demos/pi0/
+
+  - name: sample-rt2
+    image: simxlabs/rt2-sampler:1.0
+    platform: gb200
+    resources:
+      gpu: 2
+    inputs:
+    - task: env-compiler
+    outputs:
+    - url: s3://simxlabs-runs/{run_id}/demos/rt2/
+
+  - name: sample-openvla
+    image: simxlabs/openvla-sampler:1.0
+    platform: gb200
+    resources:
+      gpu: 2
+    inputs:
+    - task: env-compiler
+    outputs:
+    - url: s3://simxlabs-runs/{run_id}/demos/openvla/
+
+  - name: sample-mimicgen
+    image: simxlabs/mimicgen-sampler:1.0
+    platform: rtx-pro-6000
+    resources:
+      gpu: 2
+    inputs:
+    - task: env-compiler
+    outputs:
+    - url: s3://simxlabs-runs/{run_id}/demos/mimicgen/
+
+  - name: physics-verifier
+    image: simxlabs/physics-gate:1.0
+    platform: x86-64
+    inputs:
+    - task: sample-pi0
+    - task: sample-rt2
+    - task: sample-openvla
+    - task: sample-mimicgen
+    outputs:
+    - url: s3://simxlabs-runs/{run_id}/verified/
+
+  - name: semantic-cache-write
+    image: simxlabs/semantic-cache:1.0
+    platform: x86-64
+    inputs:
+    - task: physics-verifier
+    outputs:
+    - url: s3://simxlabs-datasets/cache/{task_type}_{num_demos}/
+"""
 
 
 # ── Background DAG execution (hybrid simulation) ─────────────────────────────
@@ -474,6 +564,20 @@ textarea::placeholder{color:rgba(255,255,255,0.14);}
   border-radius:9px;text-decoration:none;color:rgba(197,232,176,0.4);
   font-size:11px;font-weight:500;transition:all 0.15s;}
 .trace-btn:hover{background:rgba(125,200,90,0.09);color:#7DC85A;}
+
+/* ─── PIPELINE INTEL TABS ─── */
+.intel-tabs{display:flex;gap:5px;margin:12px 0 10px;}
+.itab{font-size:9px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;
+  padding:5px 12px;border-radius:6px;cursor:pointer;transition:all 0.15s;
+  background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);
+  color:rgba(255,255,255,0.22);}
+.itab.on{background:rgba(125,200,90,0.08);border-color:rgba(125,200,90,0.22);color:#7DC85A;}
+.ipanel{display:none;}
+.ipanel.show{display:block;}
+.code-blk{background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.06);
+  border-radius:8px;padding:12px 14px;font-family:'JetBrains Mono',monospace;
+  font-size:9.5px;color:rgba(255,255,255,0.5);white-space:pre;overflow:auto;
+  max-height:170px;line-height:1.75;margin-bottom:10px;}
 </style></head>
 <body>
 <div class="shell">
@@ -671,11 +775,24 @@ textarea::placeholder{color:rgba(255,255,255,0.14);}
             </div>
             <div class="prog-track"><div class="prog-fill" id="pFill"></div></div>
             <div class="stage-txt" id="stageTxt">Initializing...</div>
-            <div class="model-grid">
-              <div class="mc" id="mc-Pi0"><div class="mc-name">Pi0</div><div class="mc-demos" id="md-Pi0">—</div><div class="mc-div" id="mdiv-Pi0">div —</div><div class="mc-dot"></div></div>
-              <div class="mc" id="mc-RT2"><div class="mc-name">RT-2</div><div class="mc-demos" id="md-RT2">—</div><div class="mc-div" id="mdiv-RT2">div —</div><div class="mc-dot"></div></div>
-              <div class="mc" id="mc-OpenVLA"><div class="mc-name">OpenVLA</div><div class="mc-demos" id="md-OpenVLA">—</div><div class="mc-div" id="mdiv-OpenVLA">div —</div><div class="mc-dot"></div></div>
-              <div class="mc" id="mc-MimicGen"><div class="mc-name">MimicGen</div><div class="mc-demos" id="md-MimicGen">—</div><div class="mc-div" id="mdiv-MimicGen">div —</div><div class="mc-dot"></div></div>
+            <div class="intel-tabs">
+              <div class="itab on" id="tab-intent" onclick="switchTab('intent')">GPT-4o Intent</div>
+              <div class="itab" id="tab-osmo" onclick="switchTab('osmo')">OSMO Workflow</div>
+              <div class="itab" id="tab-exec" onclick="switchTab('exec')">Execution</div>
+            </div>
+            <div class="ipanel show" id="panel-intent">
+              <div class="code-blk" id="intentBlk">Parsing intent with GPT-4o-mini...</div>
+            </div>
+            <div class="ipanel" id="panel-osmo">
+              <div class="code-blk" id="osmoBlk">Generating OSMO workflow YAML...</div>
+            </div>
+            <div class="ipanel" id="panel-exec">
+              <div class="model-grid">
+                <div class="mc" id="mc-Pi0"><div class="mc-name">Pi0</div><div class="mc-demos" id="md-Pi0">—</div><div class="mc-div" id="mdiv-Pi0">div —</div><div class="mc-dot"></div></div>
+                <div class="mc" id="mc-RT2"><div class="mc-name">RT-2</div><div class="mc-demos" id="md-RT2">—</div><div class="mc-div" id="mdiv-RT2">div —</div><div class="mc-dot"></div></div>
+                <div class="mc" id="mc-OpenVLA"><div class="mc-name">OpenVLA</div><div class="mc-demos" id="md-OpenVLA">—</div><div class="mc-div" id="mdiv-OpenVLA">div —</div><div class="mc-dot"></div></div>
+                <div class="mc" id="mc-MimicGen"><div class="mc-name">MimicGen</div><div class="mc-demos" id="md-MimicGen">—</div><div class="mc-div" id="mdiv-MimicGen">div —</div><div class="mc-dot"></div></div>
+              </div>
             </div>
             <div class="results" id="results">
               <div class="results-row">
@@ -699,6 +816,13 @@ textarea::placeholder{color:rgba(255,255,255,0.14);}
 const MODELS=['Pi0','RT-2','OpenVLA','MimicGen'];
 let pollId=null, done=new Set();
 let demoCount=48219, diversityVal=0.87, speedup=54;
+
+function switchTab(t){
+  ['intent','osmo','exec'].forEach(id=>{
+    document.getElementById('panel-'+id).classList.toggle('show',id===t);
+    document.getElementById('tab-'+id).classList.toggle('on',id===t);
+  });
+}
 
 // Live demo counter ticks slowly
 setInterval(()=>{
@@ -745,6 +869,9 @@ async function startRun(){
   });
   document.getElementById('results').classList.remove('show');
   document.getElementById('pFill').style.width='0%';
+  document.getElementById('intentBlk').textContent='Parsing intent with GPT-4o-mini...';
+  document.getElementById('osmoBlk').textContent='Generating OSMO workflow YAML...';
+  switchTab('intent');
   try{
     const r=await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({intent})});
     const d=await r.json();
@@ -752,6 +879,13 @@ async function startRun(){
     document.getElementById('runStatus').classList.add('show');
     document.getElementById('tickerTxt').innerHTML='<span class="act">&#8594; Run '+d.run_id+' launched &middot; ETA ~'+d.eta_seconds+'s</span>';
     btn.textContent='Running...';
+    // Populate intent + OSMO panels immediately from response
+    if(d.parsed_intent){
+      document.getElementById('intentBlk').textContent=JSON.stringify(d.parsed_intent,null,2);
+    }
+    if(d.osmo_workflow){
+      document.getElementById('osmoBlk').textContent=d.osmo_workflow;
+    }
     pollId=setInterval(()=>poll(d.run_id),1800);
   }catch(e){btn.disabled=false;btn.textContent='Run Simulation →';}
 }
@@ -820,10 +954,13 @@ async def create_run(req: RunRequest, background_tasks: BackgroundTasks):
 
     run_id = str(uuid.uuid4())[:8].upper()
 
+    osmo_workflow = generate_osmo_workflow(run_id, parsed, num_demos, cfg)
+
     runs[run_id] = {
         "run_id": run_id,
         "intent": req.intent,
         "parsed_intent": parsed,
+        "osmo_workflow": osmo_workflow,
         "status": "queued",
         "stage": "Queued",
         "progress": 0.0,
@@ -845,6 +982,8 @@ async def create_run(req: RunRequest, background_tasks: BackgroundTasks):
         created_at=runs[run_id]["created_at"],
         trace_url=f"{base_url}/trace/{run_id}/view",
         message=f"Run {run_id} queued. Sampling across Pi0, RT-2, OpenVLA, and MimicGen. ETA ~{eta}s.",
+        parsed_intent=parsed,
+        osmo_workflow=osmo_workflow,
     )
 
 
