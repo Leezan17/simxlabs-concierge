@@ -1057,6 +1057,7 @@ textarea::placeholder{color:rgba(255,255,255,0.14);}
             </div>
             <div class="ipanel" id="panel-osmo">
               <div class="code-blk" id="osmoBlk">Generating OSMO workflow YAML...</div>
+              <button id="yamlDlBtn" onclick="downloadYaml()" style="display:none;margin-top:8px;padding:6px 14px;font-size:9px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;background:rgba(125,200,90,0.08);border:1px solid rgba(125,200,90,0.25);border-radius:6px;color:#7DC85A;cursor:pointer;transition:all 0.15s;" onmouseover="this.style.background='rgba(125,200,90,0.16)'" onmouseout="this.style.background='rgba(125,200,90,0.08)'">&#8595; Download YAML</button>
             </div>
             <div class="ipanel" id="panel-exec">
               <div class="model-grid">
@@ -1094,6 +1095,19 @@ function switchTab(t){
     document.getElementById('panel-'+id).classList.toggle('show',id===t);
     document.getElementById('tab-'+id).classList.toggle('on',id===t);
   });
+}
+
+function downloadYaml(){
+  const btn=document.getElementById('yamlDlBtn');
+  const runId=btn.dataset.runId;
+  const yaml=document.getElementById('osmoBlk').textContent;
+  if(!yaml||yaml.startsWith('Generating')) return;
+  const blob=new Blob([yaml],{type:'text/yaml'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='simxlabs-osmo-'+runId+'.yaml';
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // Live demo counter ticks slowly
@@ -1157,6 +1171,8 @@ async function startRun(){
     }
     if(d.osmo_workflow){
       document.getElementById('osmoBlk').textContent=d.osmo_workflow;
+      document.getElementById('yamlDlBtn').style.display='inline-block';
+      document.getElementById('yamlDlBtn').dataset.runId=d.run_id;
     }
     pollId=setInterval(()=>poll(d.run_id),1800);
   }catch(e){btn.disabled=false;btn.textContent='Run Simulation →';}
