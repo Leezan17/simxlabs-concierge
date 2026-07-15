@@ -89,7 +89,7 @@ def parse_intent_with_llm(intent: str) -> Dict[str, Any]:
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            max_tokens=300,
+            max_tokens=600,
             messages=[
                 {
                     "role": "system",
@@ -120,7 +120,9 @@ def parse_intent_with_llm(intent: str) -> Dict[str, Any]:
                         "  - Workspace boundaries or collision zones\n"
                         "  - ANY phrase with 'must', 'only', 'between', 'within', 'no more than', 'at least', 'degrees'\n"
                         "  - Do NOT require the word 'constraint' — infer from context\n"
-                        "  - Return [] only if truly no constraints are mentioned\n\n"
+                        "  - Return [] only if truly no constraints are mentioned\n"
+                        "  - CRITICAL: every string in the list must be a COMPLETE sentence or phrase. "
+                        "Never cut a string mid-sentence. Never duplicate or overlap content across items.\n\n"
                         "Return ONLY a valid JSON object. No markdown, no explanation."
                     ),
                 },
@@ -223,7 +225,14 @@ def generate_osmo_workflow(run_id: str, parsed: Dict, num_demos: int, cfg: Dict)
         "MuJoCo":    "simxlabs/mujoco-worker:latest",
         "Genesis":   "simxlabs/genesis-sim:latest",
     }.get(sim_engine, "nvcr.io/nvidia/isaac-sim:4.2.0")
-    slug = task_type.replace("_", "-")
+    slug = task_type.replace("_", "-").replace(" ", "-")
+    # Distribute demos across 4 models: remainder goes to pi0 so total == num_demos exactly
+    base_demos   = num_demos // 4
+    remainder    = num_demos % 4
+    demos_pi0      = base_demos + remainder
+    demos_rt2      = base_demos
+    demos_openvla  = base_demos
+    demos_mimicgen = base_demos
     return f"""# SimXLabs x NVIDIA OSMO — Generated Workflow
 # Run: {run_id}  |  Task: {task_type}  |  Demos: {num_demos:,}
 # Compiled by SimXLabs Decision Engine
@@ -243,16 +252,16 @@ workflow:
     tasks:
     - name: sample-pi0
       image: simxlabs/pi0-sampler:1.0
-      command: ["python", "-m", "pi0.sample", "--task", "{task_type}", "--demos", "{num_demos // 4}"]
+      command: ["python", "-m", "pi0.sample", "--task", "{task_type}", "--demos", "{demos_pi0}"]
     - name: sample-rt2
       image: simxlabs/rt2-sampler:1.0
-      command: ["python", "-m", "rt2.sample", "--task", "{task_type}", "--demos", "{num_demos // 4}"]
+      command: ["python", "-m", "rt2.sample", "--task", "{task_type}", "--demos", "{demos_rt2}"]
     - name: sample-openvla
       image: simxlabs/openvla-sampler:1.0
-      command: ["python", "-m", "openvla.sample", "--task", "{task_type}", "--demos", "{num_demos // 4}"]
+      command: ["python", "-m", "openvla.sample", "--task", "{task_type}", "--demos", "{demos_openvla}"]
     - name: sample-mimicgen
       image: simxlabs/mimicgen-sampler:1.0
-      command: ["python", "-m", "mimicgen.sample", "--task", "{task_type}", "--demos", "{num_demos // 4}"]
+      command: ["python", "-m", "mimicgen.sample", "--task", "{task_type}", "--demos", "{demos_mimicgen}"]
 
   - name: verify
     tasks:
@@ -278,8 +287,11 @@ def generate_osmo_workflow_submittable(run_id: str, task_type: str, num_demos: i
      - `command` is required; `image` must be pullable
     Uses busybox (always available) to simulate the pipeline stages.
     """
-    slug = task_type.replace("_", "-")
-    demos_per = num_demos // 4
+    slug = task_type.replace("_", "-").replace(" ", "-")
+    base_demos = num_demos // 4
+    remainder  = num_demos % 4
+    demos_per  = base_demos  # for rt2/openvla/mimicgen
+    demos_pi0  = base_demos + remainder  # pi0 absorbs remainder so total == num_demos
     # OSMO appends a counter suffix automatically, keep name short
     wf_name = f"sx-{slug}-{run_id.lower()}"
     # Note: OSMO requires ALL task names to be globally unique across all groups.
@@ -299,7 +311,7 @@ def generate_osmo_workflow_submittable(run_id: str, task_type: str, num_demos: i
     tasks:
     - name: pi0-sample
       image: busybox
-      command: ["sh", "-c", "echo [Pi0] demos={demos_per} diversity=0.91 engine=MuJoCo && sleep 3"]
+      command: ["sh", "-c", "echo [Pi0] demos={demos_pi0} diversity=0.91 engine=MuJoCo && sleep 3"]
 
   - name: sample-rt2
     tasks:
