@@ -1347,6 +1347,118 @@ async function poll(id){
 
 
 # ── API routes ───────────────────────────────────────────────────────────────
+
+class WorkflowGenerateRequest(BaseModel):
+    intent: str
+    num_demos: Optional[int] = None
+
+class ValidateRequest(BaseModel):
+    yaml: str
+
+
+@app.post("/generate-workflow")
+async def generate_workflow_from_intent(req: WorkflowGenerateRequest):
+    """
+    Generate a production-ready OSMO v6 workflow YAML from natural-language intent.
+    Uses GPT-4o-mini for parsing. Does NOT start a simulation — pure YAML generation.
+    """
+    parsed = parse_intent_with_llm(req.intent)
+    if req.num_demos:
+        parsed["num_demos"] = req.num_demos
+
+    task_type = parsed.get("task_type", "custom")
+    num_demos  = parsed.get("num_demos", 10000)
+    cfg        = TASK_CONFIGS.get(task_type, TASK_CONFIGS["custom"])
+    run_id     = str(uuid.uuid4())[:8].upper()
+
+    osmo_yaml  = generate_osmo_workflow(run_id, parsed, num_demos, cfg)
+
+    return JSONResponse({
+        "run_id":        run_id,
+        "parsed_intent": parsed,
+        "osmo_workflow": osmo_yaml,
+        "task_type":     task_type,
+        "num_demos":     num_demos,
+        "sim_engine":    cfg.get("sim_engine", "MuJoCo"),
+    })
+
+
+@app.post("/validate-workflow")
+async def validate_workflow_yaml(req: ValidateRequest):
+    """
+    Validate an OSMO v6 workflow YAML string against the schema rules discovered
+    through real cluster testing (see memory/osmo-v6-schema.md).
+    Returns structured pass/fail with specific error messages.
+    """
+    yaml_str = req.yaml.strip()
+    if not yaml_str:
+        return JSONResponse({"valid": False, "error": "No YAML content provided."})
+
+    try:
+        import yaml as pyyaml
+        doc = pyyaml.safe_load(yaml_str)
+    except Exception as e:
+        return JSONResponse({"valid": False, "error": f"YAML parse error: {e}"})
+
+    if not isinstance(doc, dict):
+        return JSONResponse({"valid": False, "error": "Root must be a YAML mapping."})
+
+    if "workflow" not in doc:
+        return JSONResponse({"valid": False, "error": "Missing top-level 'workflow' key."})
+
+    wf = doc["workflow"]
+
+    if "name" not in wf:
+        return JSONResponse({"valid": False, "error": "Missing workflow.name."})
+
+    # OSMO v6 canonical rule: groups, not top-level tasks
+    if "groups" not in wf:
+        if "tasks" in wf:
+            return JSONResponse({
+                "valid": False,
+                "error": "OSMO v6 requires 'groups' not top-level 'tasks'. "
+                         "Wrap your tasks inside a group: groups: [{name: ..., tasks: [...]}]"
+            })
+        return JSONResponse({"valid": False, "error": "Missing workflow.groups."})
+
+    groups = wf["groups"]
+    if not isinstance(groups, list) or len(groups) == 0:
+        return JSONResponse({"valid": False, "error": "workflow.groups must be a non-empty list."})
+
+    total_tasks = 0
+    warnings: List[str] = []
+
+    for g in groups:
+        if "name" not in g:
+            return JSONResponse({"valid": False, "error": "A group is missing the 'name' field."})
+        if "tasks" not in g:
+            return JSONResponse({"valid": False, "error": f"Group '{g.get('name', '?')}' missing 'tasks'."})
+        for t in g["tasks"]:
+            if "name" not in t:
+                return JSONResponse({"valid": False, "error": f"A task in group '{g['name']}' is missing 'name'."})
+            if "image" not in t:
+                return JSONResponse({"valid": False, "error": f"Task '{t.get('name', '?')}' missing 'image'."})
+            if "command" not in t:
+                return JSONResponse({"valid": False, "error": f"Task '{t.get('name', '?')}' missing 'command'."})
+            total_tasks += 1
+
+    # Warn about fields unsupported by backend=default in v6
+    if "platform" in wf:
+        warnings.append("'platform' is not supported in OSMO v6 with backend=default.")
+    if any("needs" in g for g in groups) or "dependencies" in wf:
+        warnings.append("'needs'/'dependencies' are not supported in OSMO v6 backend=default.")
+    if any(len(g.get("tasks", [])) > 1 for g in groups):
+        warnings.append("Co-scheduled tasks (multiple tasks in one group) may not be supported by backend=default.")
+
+    return JSONResponse({
+        "valid":         True,
+        "workflow_name": wf["name"],
+        "groups":        len(groups),
+        "tasks":         total_tasks,
+        "warnings":      warnings,
+    })
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "0.1.0-pilot", "runs_in_memory": len(runs)}
