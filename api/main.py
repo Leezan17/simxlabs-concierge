@@ -89,7 +89,7 @@ def parse_intent_with_llm(intent: str) -> Dict[str, Any]:
         client = OpenAI(api_key=api_key)
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            max_tokens=600,
+            max_tokens=700,
             messages=[
                 {
                     "role": "system",
@@ -112,17 +112,21 @@ def parse_intent_with_llm(intent: str) -> Dict[str, Any]:
                         "Handle: commas ('17,213' → 17213), k-suffix ('10k' → 10000), plain integers. "
                         "Default 10000 if no number found.\n\n"
                         "diversity_goal: 'high', 'medium', or 'low'.\n\n"
-                        "key_constraints: List of strings (max 5). "
-                        "Extract every specific requirement, limit, or condition mentioned, including:\n"
-                        "  - Joint/angle ranges: e.g. 'hand angle: 35°-45°'\n"
-                        "  - Speed, force, or torque limits\n"
-                        "  - Object material, size, or pose conditions\n"
-                        "  - Workspace boundaries or collision zones\n"
-                        "  - ANY phrase with 'must', 'only', 'between', 'within', 'no more than', 'at least', 'degrees'\n"
-                        "  - Do NOT require the word 'constraint' — infer from context\n"
-                        "  - Return [] only if truly no constraints are mentioned\n"
-                        "  - CRITICAL: every string in the list must be a COMPLETE sentence or phrase. "
-                        "Never cut a string mid-sentence. Never duplicate or overlap content across items.\n\n"
+                        "key_constraints: A list of UNIQUE constraint strings (max 5). "
+                        "STRICT DEDUPLICATION RULES — you MUST follow these:\n"
+                        "  1. Each physical constraint dimension appears AT MOST ONCE in the list.\n"
+                        "  2. An angle range (e.g. '45 to 75 degrees', 'within 45-75 deg', '45°-75°') is ONE constraint — include it exactly once with the clearest phrasing.\n"
+                        "  3. A flow rate or speed limit is ONE constraint regardless of how many times the user states it.\n"
+                        "  4. Robot dimensions (e.g. '7 by 10 inches') are ONE constraint.\n"
+                        "  5. Do NOT include the requested demo/sample count as a constraint — that is captured in num_demos.\n"
+                        "  6. Group similar values together: if the prompt says 'only within 45-75 degrees' and also references '45 to 75', that is still ONE entry.\n"
+                        "  Constraint categories to extract (each appears at most once):\n"
+                        "  - Robot geometry or dimensions (size, weight, DOF, end-effector type)\n"
+                        "  - Motion range or angle limits (joint range, workspace boundary)\n"
+                        "  - Speed, flow rate, torque, or force limits\n"
+                        "  - Target object or material conditions\n"
+                        "  - Precision requirements or quality thresholds\n"
+                        "  Complete phrases only. Return [] if no constraints exist.\n\n"
                         "Return ONLY a valid JSON object. No markdown, no explanation."
                     ),
                 },
@@ -136,9 +140,52 @@ def parse_intent_with_llm(intent: str) -> Dict[str, Any]:
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        return json.loads(raw.strip())
+        parsed = json.loads(raw.strip())
+        # Post-process: deduplicate constraints by shared number fingerprint
+        parsed["key_constraints"] = _deduplicate_constraints(
+            parsed.get("key_constraints", [])
+        )
+        return parsed
     except Exception:
         return _fallback_parse(intent)
+
+
+def _deduplicate_constraints(constraints: List[str]) -> List[str]:
+    """
+    Remove semantically duplicate constraints.
+    Two constraints are considered duplicates if they share the same set of
+    numeric values (e.g. '45 to 75 degrees' and 'within 45-75 deg' both
+    contain {'45','75'} and should collapse to one entry).
+    """
+    import re
+    if not constraints:
+        return constraints
+
+    def num_fingerprint(s: str) -> frozenset:
+        return frozenset(re.findall(r'\d+(?:\.\d+)?', s))
+
+    result: List[str] = []
+    seen_fingerprints: List[frozenset] = []
+
+    for c in constraints:
+        fp = num_fingerprint(c)
+        is_dup = False
+        if fp:  # only fingerprint-check if the constraint contains numbers
+            for seen in seen_fingerprints:
+                # Same set of numbers → same constraint
+                if fp == seen:
+                    is_dup = True
+                    break
+                # Subset with at least 2 shared numbers → likely same constraint
+                overlap = fp & seen
+                if len(overlap) >= 2 and (fp.issubset(seen) or seen.issubset(fp)):
+                    is_dup = True
+                    break
+        if not is_dup:
+            result.append(c)
+            seen_fingerprints.append(fp)
+
+    return result
 
 
 def _fallback_parse(intent: str) -> Dict[str, Any]:
@@ -212,11 +259,30 @@ def _fallback_parse(intent: str) -> Dict[str, Any]:
     }
 
 
-def generate_osmo_workflow(run_id: str, parsed: Dict, num_demos: int, cfg: Dict) -> str:
+def _compute_allocation(num_demos: int) -> List[int]:
+    """
+    Distribute num_demos exactly across [Pi0, RT-2, OpenVLA, MimicGen].
+    Pi0 absorbs the remainder so the total is always exactly num_demos.
+    Returns [demos_pi0, demos_rt2, demos_openvla, demos_mimicgen].
+    """
+    base = num_demos // 4
+    rem  = num_demos % 4
+    return [base + rem, base, base, base]
+
+
+def generate_osmo_workflow(
+    run_id: str,
+    parsed: Dict,
+    num_demos: int,
+    cfg: Dict,
+    allocation: Optional[List[int]] = None,
+) -> str:
     """
     Compile SimXLabs intent into a valid NVIDIA OSMO workflow YAML.
-    Produces the canonical YAML shown to users in the UI (production-target form).
-    For actual local submission, see generate_osmo_workflow_submittable().
+    Each sampler runs in its own group (one task per group) so the workflow
+    passes OSMO v6 backend=default validation without warnings.
+    `allocation` is [pi0, rt2, openvla, mimicgen] demo counts — computed once
+    and shared with execute_dag so YAML and results always agree.
     """
     task_type = parsed.get("task_type", "bin_picking")
     sim_engine = cfg.get("sim_engine", "Isaac Sim")
@@ -226,16 +292,29 @@ def generate_osmo_workflow(run_id: str, parsed: Dict, num_demos: int, cfg: Dict)
         "Genesis":   "simxlabs/genesis-sim:latest",
     }.get(sim_engine, "nvcr.io/nvidia/isaac-sim:4.2.0")
     slug = task_type.replace("_", "-").replace(" ", "-")
-    # Distribute demos across 4 models: remainder goes to pi0 so total == num_demos exactly
-    base_demos   = num_demos // 4
-    remainder    = num_demos % 4
-    demos_pi0      = base_demos + remainder
-    demos_rt2      = base_demos
-    demos_openvla  = base_demos
-    demos_mimicgen = base_demos
+
+    # Use provided allocation or compute it — same formula everywhere
+    if allocation is None:
+        allocation = _compute_allocation(num_demos)
+    demos_pi0, demos_rt2, demos_openvla, demos_mimicgen = allocation
+
+    # Embed key constraints as YAML comments so the file is prompt-specific
+    constraints = parsed.get("key_constraints", [])
+    constraint_lines = ""
+    if constraints:
+        constraint_lines = "\n" + "\n".join(f"#   {i+1}. {c}" for i, c in enumerate(constraints))
+
     return f"""# SimXLabs x NVIDIA OSMO — Generated Workflow
-# Run: {run_id}  |  Task: {task_type}  |  Demos: {num_demos:,}
-# Compiled by SimXLabs Decision Engine
+# Run: {run_id}  |  Task: {task_type}  |  Total demos: {num_demos:,}
+# Sim engine: {sim_engine}  |  Compiled by SimXLabs Decision Engine
+#
+# Parsed constraints:{constraint_lines if constraint_lines else " (none)"}
+#
+# Demo allocation (sums exactly to {num_demos:,}):
+#   Pi0      → {demos_pi0:,}
+#   RT-2     → {demos_rt2:,}
+#   OpenVLA  → {demos_openvla:,}
+#   MimicGen → {demos_mimicgen:,}
 
 workflow:
   name: simxlabs-{slug}-{run_id.lower()}
@@ -248,20 +327,29 @@ workflow:
       image: {engine_image}
       command: ["python", "-m", "simxlabs.env", "--task", "{task_type}", "--run-id", "{run_id}"]
 
-  - name: sample
+  - name: sample-pi0
     tasks:
-    - name: sample-pi0
+    - name: sample-pi0-task
       image: simxlabs/pi0-sampler:1.0
-      command: ["python", "-m", "pi0.sample", "--task", "{task_type}", "--demos", "{demos_pi0}"]
-    - name: sample-rt2
+      command: ["python", "-m", "pi0.sample", "--task", "{task_type}", "--demos", "{demos_pi0}", "--run-id", "{run_id}"]
+
+  - name: sample-rt2
+    tasks:
+    - name: sample-rt2-task
       image: simxlabs/rt2-sampler:1.0
-      command: ["python", "-m", "rt2.sample", "--task", "{task_type}", "--demos", "{demos_rt2}"]
-    - name: sample-openvla
+      command: ["python", "-m", "rt2.sample", "--task", "{task_type}", "--demos", "{demos_rt2}", "--run-id", "{run_id}"]
+
+  - name: sample-openvla
+    tasks:
+    - name: sample-openvla-task
       image: simxlabs/openvla-sampler:1.0
-      command: ["python", "-m", "openvla.sample", "--task", "{task_type}", "--demos", "{demos_openvla}"]
-    - name: sample-mimicgen
+      command: ["python", "-m", "openvla.sample", "--task", "{task_type}", "--demos", "{demos_openvla}", "--run-id", "{run_id}"]
+
+  - name: sample-mimicgen
+    tasks:
+    - name: sample-mimicgen-task
       image: simxlabs/mimicgen-sampler:1.0
-      command: ["python", "-m", "mimicgen.sample", "--task", "{task_type}", "--demos", "{demos_mimicgen}"]
+      command: ["python", "-m", "mimicgen.sample", "--task", "{task_type}", "--demos", "{demos_mimicgen}", "--run-id", "{run_id}"]
 
   - name: verify
     tasks:
@@ -273,7 +361,7 @@ workflow:
     tasks:
     - name: semantic-cache-write
       image: simxlabs/semantic-cache:1.0
-      command: ["python", "-m", "simxlabs.cache", "--task", "{task_type}", "--demos", "{num_demos}"]
+      command: ["python", "-m", "simxlabs.cache", "--task", "{task_type}", "--demos", "{num_demos}", "--run-id", "{run_id}"]
 """
 
 
@@ -571,7 +659,7 @@ def run_mujoco_batch(task_type: str, num_demos_for_model: int, model_name: str) 
 
 
 # ── Background DAG execution (hybrid simulation) ─────────────────────────────
-async def execute_dag(run_id: str, parsed: Dict, num_demos: int, eta: int):
+async def execute_dag(run_id: str, parsed: Dict, num_demos: int, eta: int, allocation: Optional[List[int]] = None):
     run = runs[run_id]
     dag_nodes = []
 
@@ -648,10 +736,10 @@ async def execute_dag(run_id: str, parsed: Dict, num_demos: int, eta: int):
         )
 
     # ── Stage 4: Real MuJoCo sampling across all 4 models ────────────────────
-    # Randomized allocation: each model gets an unequal share that sums exactly
-    # to num_demos, simulating task-specific model suitability differences.
+    # Use the SAME allocation that was compiled into the OSMO workflow YAML
+    # so the results panel always matches the workflow panel exactly.
     model_results = []
-    demo_allocation = _random_allocation(num_demos, len(FOUNDATION_MODELS))
+    demo_allocation = allocation if allocation is not None else _compute_allocation(num_demos)
 
     for i, model in enumerate(FOUNDATION_MODELS):
         run["stage"] = f"Sampling — {model}"
@@ -1478,7 +1566,9 @@ async def create_run(req: RunRequest, background_tasks: BackgroundTasks):
 
     run_id = str(uuid.uuid4())[:8].upper()
 
-    osmo_workflow = generate_osmo_workflow(run_id, parsed, num_demos, cfg)
+    # Compute allocation ONCE — shared between YAML and execution so they always match
+    allocation = _compute_allocation(num_demos)
+    osmo_workflow = generate_osmo_workflow(run_id, parsed, num_demos, cfg, allocation=allocation)
 
     runs[run_id] = {
         "run_id": run_id,
@@ -1495,7 +1585,7 @@ async def create_run(req: RunRequest, background_tasks: BackgroundTasks):
         "error": None,
     }
 
-    background_tasks.add_task(execute_dag, run_id, parsed, num_demos, eta)
+    background_tasks.add_task(execute_dag, run_id, parsed, num_demos, eta, allocation=allocation)
 
     base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
     return RunResponse(
