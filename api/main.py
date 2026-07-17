@@ -81,9 +81,14 @@ class RunResponse(BaseModel):
 # ── Intent parsing (real LLM call via Anthropic SDK) ────────────────────────
 def parse_intent_with_llm(intent: str) -> Dict[str, Any]:
     """Use GPT-4o-mini to extract structured fields from a natural-language intent."""
+    import logging
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        return _fallback_parse(intent)
+        logging.warning("OPENAI_API_KEY not set — using fallback parser")
+        result = _fallback_parse(intent)
+        result["_llm_used"] = False
+        result["_llm_error"] = "OPENAI_API_KEY not configured"
+        return result
 
     try:
         client = OpenAI(api_key=api_key)
@@ -145,9 +150,15 @@ def parse_intent_with_llm(intent: str) -> Dict[str, Any]:
         parsed["key_constraints"] = _deduplicate_constraints(
             parsed.get("key_constraints", [])
         )
+        parsed["_llm_used"] = True
         return parsed
-    except Exception:
-        return _fallback_parse(intent)
+    except Exception as e:
+        import logging
+        logging.error(f"GPT-4o-mini parse failed: {type(e).__name__}: {e}")
+        result = _fallback_parse(intent)
+        result["_llm_used"] = False
+        result["_llm_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+        return result
 
 
 def _deduplicate_constraints(constraints: List[str]) -> List[str]:
@@ -189,85 +200,147 @@ def _deduplicate_constraints(constraints: List[str]) -> List[str]:
 
 
 def _fallback_parse(intent: str) -> Dict[str, Any]:
-    """Rule-based fallback if no API key is set."""
+    """
+    Rule-based fallback when GPT-4o-mini is unavailable.
+    Extracts each constraint dimension ONCE using typed patterns so it
+    correctly handles the canonical test prompt without duplication.
+    """
     import re
     lower = intent.lower()
 
-    # Determine task label — 2-3 word robotics description
-    if "bin pick" in lower or "bin-pick" in lower:
-        task = "bin picking"
-    elif "peg" in lower and ("insert" in lower or "insertion" in lower):
-        task = "peg insertion"
-    elif "door" in lower and ("open" in lower or "opening" in lower):
-        task = "door opening"
-    elif "cloth" in lower and "fold" in lower:
-        task = "cloth folding"
-    elif "pour" in lower or "pouring" in lower:
-        task = "liquid pouring"
-    elif "grasp" in lower or "grasping" in lower:
-        task = "object grasping"
-    elif "manip" in lower:
-        task = "arm manipulation"
-    elif "pick" in lower and "place" in lower:
-        task = "pick and place"
-    elif "walk" in lower or "locomot" in lower:
-        task = "biped locomotion"
-    else:
-        # Attempt to derive from verbs in the text
-        for verb, label in [
-            ("insert", "peg insertion"), ("push", "contact pushing"),
-            ("pull", "cable pulling"), ("fold", "cloth folding"),
-            ("stack", "block stacking"), ("sort", "object sorting"),
-            ("weld", "welding arc"), ("reach", "arm reaching"),
-        ]:
-            if verb in lower:
-                task = label
-                break
-        else:
-            task = "robot manipulation"
+    # ── Task type ──────────────────────────────────────────────────────────────
+    task_map = [
+        (["bin pick", "bin-pick"],                      "bin picking"),
+        (["peg insert", "peg-insert"],                  "peg insertion"),
+        (["door open"],                                 "door opening"),
+        (["cloth fold", "fabric fold"],                 "cloth folding"),
+        (["pour water", "pouring water", "pour liquid",
+          "water into", "water flow"],                  "liquid pouring"),
+        (["grasp", "grasping"],                         "object grasping"),
+        (["pick and place", "pick-and-place"],          "pick and place"),
+        (["walk", "locomot"],                           "biped locomotion"),
+        (["weld"],                                      "arc welding"),
+        (["stack"],                                     "block stacking"),
+        (["insert"],                                    "peg insertion"),
+        (["fold"],                                      "cloth folding"),
+        (["reach"],                                     "arm reaching"),
+        (["push"],                                      "contact pushing"),
+        (["sort"],                                      "object sorting"),
+        (["manip", "dexterous", "dextrous", "hand"],    "dexterous manipulation"),
+    ]
+    task = "robot manipulation"
+    for keywords, label in task_map:
+        if any(kw in lower for kw in keywords):
+            task = label
+            break
 
-    # Extract number — handle comma-separated and k-suffixed
+    # ── Demo count — prefer largest number >= 100 in the sentence ─────────────
     num = 10000
-    matches = re.findall(r'[\d,]+(?:k|K)?', lower)
-    for m in matches:
+    # Match comma-formatted and k-suffix numbers
+    raw_nums = re.findall(r'[\d,]+(?:k|K)?', intent)
+    candidates = []
+    for m in raw_nums:
         cleaned = m.replace(",", "")
-        if cleaned.endswith(("k", "K")):
+        if cleaned.lower().endswith("k"):
             cleaned = cleaned[:-1] + "000"
         if cleaned.isdigit():
-            candidate = int(cleaned)
-            if candidate >= 100:  # ignore small numbers like joint degrees
-                num = candidate
-                break
+            v = int(cleaned)
+            if v >= 100:
+                candidates.append(v)
+    if candidates:
+        # Prefer the largest number >= 1000 (most likely to be demo count)
+        big = [c for c in candidates if c >= 1000]
+        num = max(big) if big else max(candidates)
 
-    # Extract constraints using heuristic patterns
+    # ── Constraints — one slot per dimension, no duplicates ───────────────────
     constraints: List[str] = []
-    angle_matches = re.findall(r'\d+\s*(?:to|–|-)\s*\d+\s*(?:degree|°|deg)', lower)
-    for m in angle_matches:
-        constraints.append(f"angle range: {m}")
-    for kw in ["must", "only", "within", "no more than", "at least", "between"]:
-        idx = lower.find(kw)
-        if idx != -1 and len(constraints) < 5:
-            snippet = intent[max(0, idx):min(len(intent), idx + 60)].strip()
-            if snippet not in constraints:
-                constraints.append(snippet)
+
+    # 1. Angle / joint range (e.g. "45 to 75 degrees", "within 45-75°")
+    angle_pat = re.search(
+        r'(\d+)\s*(?:to|–|-|and)\s*(\d+)\s*(?:degree|°|deg)',
+        lower
+    )
+    if angle_pat:
+        lo, hi = angle_pat.group(1), angle_pat.group(2)
+        constraints.append(f"motion range: {lo}° to {hi}°")
+
+    # 2. Flow rate / speed (e.g. "1 liter every 32 seconds", "2 m/s")
+    rate_pat = re.search(
+        r'(\d+(?:\.\d+)?)\s*(?:liter|litre|l)\s+(?:per|every|each|/)\s*(\d+)\s*(?:second|sec|s\b)',
+        lower
+    )
+    if rate_pat:
+        qty, period = rate_pat.group(1), rate_pat.group(2)
+        constraints.append(f"flow rate: {qty}L every {period}s")
+    else:
+        # Generic rate patterns
+        speed_pat = re.search(r'(\d+(?:\.\d+)?)\s*(?:m/s|mm/s|cm/s|mph|km/h)', lower)
+        if speed_pat:
+            constraints.append(f"speed limit: {speed_pat.group(0)}")
+
+    # 3. Robot / end-effector dimensions (e.g. "7 by 10 in", "7x10 cm")
+    dim_pat = re.search(
+        r'(\d+(?:\.\d+)?)\s*(?:by|x|×)\s*(\d+(?:\.\d+)?)\s*(?:in(?:ch)?|cm|mm|m\b)',
+        lower
+    )
+    if dim_pat:
+        constraints.append(
+            f"end-effector size: {dim_pat.group(0).strip()}"
+        )
+
+    # 4. Hard qualitative constraints ("must", "exactly", "only", "no more than")
+    hard_phrases = re.findall(
+        r'(?:must|exactly|only|no more than|at least|between)[^.,;!?\n]{8,60}',
+        lower
+    )
+    seen_words: set = set()
+    for phrase in hard_phrases:
+        words = set(phrase.split())
+        # Skip if mostly the same words as an already-added constraint
+        if words & seen_words and len(words & seen_words) > 3:
+            continue
+        seen_words |= words
+        if len(constraints) < 5:
+            constraints.append(phrase.strip().capitalize())
+
+    # 5. Target object (flowers, container, box, etc.)
+    for obj_kw, label in [
+        ("flower", "target: flowers / plant container"),
+        ("cabinet", "target: cabinet interior"),
+        ("bottle", "target: bottle"),
+        ("cup",    "target: cup"),
+        ("box",    "target: box"),
+        ("shelf",  "target: shelf"),
+    ]:
+        if obj_kw in lower and len(constraints) < 5:
+            constraints.append(label)
+            break
+
+    constraints = _deduplicate_constraints(constraints)
+
+    diversity = "high" if any(w in lower for w in ["diverse", "diversity", "varied", "variety"]) else "medium"
 
     return {
         "task_type": task,
         "num_demos": num,
-        "diversity_goal": "high" if "diverse" in lower or "diversity" in lower else "medium",
+        "diversity_goal": diversity,
         "key_constraints": constraints[:5],
     }
 
 
 def _compute_allocation(num_demos: int) -> List[int]:
     """
-    Distribute num_demos exactly across [Pi0, RT-2, OpenVLA, MimicGen].
-    Pi0 absorbs the remainder so the total is always exactly num_demos.
+    Distribute num_demos RANDOMLY across [Pi0, RT-2, OpenVLA, MimicGen].
+    Each model gets a random weighted share; Pi0 absorbs any rounding remainder
+    so the total is always exactly num_demos.
     Returns [demos_pi0, demos_rt2, demos_openvla, demos_mimicgen].
     """
-    base = num_demos // 4
-    rem  = num_demos % 4
-    return [base + rem, base, base, base]
+    weights = [random.uniform(0.15, 1.0) for _ in range(4)]
+    total_w = sum(weights)
+    counts = [int((w / total_w) * num_demos) for w in weights]
+    # Assign rounding remainder to Pi0 (index 0)
+    counts[0] += num_demos - sum(counts)
+    return counts
 
 
 def generate_osmo_workflow(
@@ -298,23 +371,7 @@ def generate_osmo_workflow(
         allocation = _compute_allocation(num_demos)
     demos_pi0, demos_rt2, demos_openvla, demos_mimicgen = allocation
 
-    # Embed key constraints as YAML comments so the file is prompt-specific
-    constraints = parsed.get("key_constraints", [])
-    constraint_lines = ""
-    if constraints:
-        constraint_lines = "\n" + "\n".join(f"#   {i+1}. {c}" for i, c in enumerate(constraints))
-
-    return f"""# SimXLabs x NVIDIA OSMO — Generated Workflow
-# Run: {run_id}  |  Task: {task_type}  |  Total demos: {num_demos:,}
-# Sim engine: {sim_engine}  |  Compiled by SimXLabs Decision Engine
-#
-# Parsed constraints:{constraint_lines if constraint_lines else " (none)"}
-#
-# Demo allocation (sums exactly to {num_demos:,}):
-#   Pi0      → {demos_pi0:,}
-#   RT-2     → {demos_rt2:,}
-#   OpenVLA  → {demos_openvla:,}
-#   MimicGen → {demos_mimicgen:,}
+    return f"""# SimXLabs x NVIDIA OSMO  |  run: {run_id}  |  task: {task_type}  |  demos: {num_demos:,}
 
 workflow:
   name: simxlabs-{slug}-{run_id.lower()}
@@ -1468,6 +1525,8 @@ async def generate_workflow_from_intent(req: WorkflowGenerateRequest):
         "task_type":     task_type,
         "num_demos":     num_demos,
         "sim_engine":    cfg.get("sim_engine", "MuJoCo"),
+        "llm_used":      parsed.get("_llm_used", False),
+        "llm_error":     parsed.get("_llm_error"),
     })
 
 
@@ -1549,7 +1608,44 @@ async def validate_workflow_yaml(req: ValidateRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "0.1.0-pilot", "runs_in_memory": len(runs)}
+    return {
+        "status": "ok",
+        "version": "0.1.0-pilot",
+        "runs_in_memory": len(runs),
+        "openai_key_set": bool(os.getenv("OPENAI_API_KEY")),
+    }
+
+
+@app.get("/debug/openai")
+async def debug_openai():
+    """Diagnostic endpoint — tests whether the OpenAI key is configured and valid."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return JSONResponse({
+            "ok": False,
+            "error": "OPENAI_API_KEY environment variable is not set",
+            "hint": "Add OPENAI_API_KEY to your Render environment variables",
+        }, status_code=500)
+    try:
+        client = OpenAI(api_key=api_key)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=10,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+        return {
+            "ok": True,
+            "model": resp.model,
+            "key_prefix": api_key[:8] + "...",
+            "tokens_used": resp.usage.total_tokens if resp.usage else None,
+        }
+    except Exception as e:
+        return JSONResponse({
+            "ok": False,
+            "error": str(e),
+            "key_prefix": api_key[:8] + "...",
+            "hint": "Key is set but the API call failed — check key validity or OpenAI account status",
+        }, status_code=500)
 
 
 @app.post("/run", response_model=RunResponse)
